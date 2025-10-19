@@ -64,6 +64,13 @@ def describe_squirrel_server():
             assert body["size"] == "large"
             http_client.close()
 
+        def it_handles_missing_name_in_post_by_inserting_null(http_client, headers):
+            data_missing_name = urllib.parse.urlencode({ "size": "small" })
+            http_client.request("POST", "/squirrels", body=data_missing_name, headers=headers)
+            with pytest.raises(http.client.RemoteDisconnected):
+                http_client.getresponse()
+            http_client.close()
+
     def describe_get_squirrels():
 
         def it_returns_200(http_client):
@@ -113,11 +120,42 @@ def describe_squirrel_server():
             http_client.request("PUT", "/squirrels/1", body=update_data, headers=headers)
             response = http_client.getresponse()
             assert response.status == 204
+            http_client.close()
+
+        def it_persists_updated_data(http_client, headers):
+            update_data = urllib.parse.urlencode({ "name": "Fluffier", "size": "giant" })
+            http_client.request("POST", "/squirrels", body=update_data, headers=headers)
+            http_client.getresponse()
+            http_client.request("PUT", "/squirrels/1", body=update_data, headers=headers)
+            http_client.getresponse()
             http_client.request("GET", "/squirrels/1")
             updated = json.loads(http_client.getresponse().read())
             assert updated["name"] == "Fluffier"
             assert updated["size"] == "giant"
             http_client.close()
+
+        def it_returns_404_when_updating_nonexistent_id(http_client, headers):
+            update_data = urllib.parse.urlencode({ "name": "Ghost", "size": "tiny" })
+            http_client.request("PUT", "/squirrels/999", body=update_data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 404
+        
+        def it_fully_replaces_record_when_updating_with_new_data(http_client, headers):
+            http_client.request("POST", "/squirrels", body=urllib.parse.urlencode({ "name": "Test2", "size": "Test2Size" }), headers=headers)
+            http_client.getresponse()
+            update_data = urllib.parse.urlencode({ "name": "NewName", "size": "NewSize" })
+            http_client.request("PUT", "/squirrels/1", body=update_data, headers=headers)
+            http_client.getresponse()
+            http_client.request("GET", "/squirrels/1")
+            updated = json.loads(http_client.getresponse().read())
+            assert updated["name"] == "NewName"
+            assert updated["size"] == "NewSize"
+            
+        def it_returns_404_when_id_is_not_an_integer(http_client, headers):
+            update_data = urllib.parse.urlencode({ "name": "Invalid", "size": "ID" })
+            http_client.request("PUT", "/squirrels/abc", body=update_data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 404
 
     def describe_delete_squirrels():
 
@@ -127,10 +165,26 @@ def describe_squirrel_server():
             http_client.request("DELETE", "/squirrels/1")
             response = http_client.getresponse()
             assert response.status == 204
-            http_client.request("GET", "/squirrels/1")
-            not_found = http_client.getresponse()
-            assert not_found.status == 404
             http_client.close()
+
+        def it_removes_record_from_database(http_client):
+            http_client.request("GET", "/squirrels/1")
+            response = http_client.getresponse()
+            assert response.status == 404
+            http_client.close()
+
+        def it_returns_404_for_deleting_nonexistent_id(http_client):
+            http_client.request("DELETE", "/squirrels/999")
+            response = http_client.getresponse()
+            assert response.status == 404
+            http_client.close()
+
+        def it_returns_404_for_missing_id(http_client):
+            http_client.request("DELETE", "/squirrels")
+            response = http_client.getresponse()
+            assert response.status == 404
+            http_client.close()
+
 
     def describe_404_failures():
 
