@@ -12,18 +12,16 @@ SERVER_PATH = os.path.join(os.path.dirname(__file__), "squirrel_server.py")
 
 @pytest.fixture(autouse=True)
 def reset_db_and_server():
-    # Reset DB
+
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
     shutil.copyfile(TEMPLATE_DB, DB_PATH)
 
-    # Start server
     server = subprocess.Popen(["python3", SERVER_PATH])
-    time.sleep(0.5)  # Give server time to start
+    time.sleep(0.5) 
 
     yield
 
-    # Teardown
     server.terminate()
     server.wait()
 
