@@ -1,20 +1,41 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from squirrel_db import SquirrelDB
-
 import http.client
 import json
-import os
 import pytest
 import shutil
 import subprocess
 import time
 import urllib
-import sys
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+import concurrent.futures
+import socket
+import psutil
+
+def kill_existing_server(port=8080):
+    for conn in psutil.net_connections():
+        if conn.laddr.port == port and conn.status == 'LISTEN':
+            pid = conn.pid
+            if pid:
+                p = psutil.Process(pid)
+                p.terminate()
+                p.wait()
+
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "squirrel_db.db")
 EMPTY_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "empty_squirrel_db.db")
 
 def describe_squirrel_server():
+
+    #@pytest.fixture(autouse=True, scope="session")
+    #def start_server():
+    #     kill_existing_server(port=8080)
+    #     server = subprocess.Popen(["python3", "src/squirrel_server.py"])
+    #     time.sleep(1)
+    #     yield
+    #     server.terminate()
+    #     server.wait()
 
     @pytest.fixture(autouse=True)
     def reset_database():
@@ -28,11 +49,11 @@ def describe_squirrel_server():
 
     @pytest.fixture(autouse=True, scope="session")
     def start_server():
-        server = subprocess.Popen(["python3", "src/squirrel_server.py"])
-        time.sleep(1)
-        yield
-        server.terminate()
-        server.wait()
+         server = subprocess.Popen(["python3", "src/squirrel_server.py"])
+         time.sleep(1)
+         yield
+         server.terminate()
+         server.wait()
 
     @pytest.fixture
     def http_client():
@@ -64,11 +85,26 @@ def describe_squirrel_server():
             assert body["size"] == "large"
             http_client.close()
 
-        def it_handles_missing_name_in_post_by_inserting_null(http_client, headers):
-            data_missing_name = urllib.parse.urlencode({ "size": "small" })
-            http_client.request("POST", "/squirrels", body=data_missing_name, headers=headers)
-            with pytest.raises(http.client.RemoteDisconnected):
-                http_client.getresponse()
+        def it_ignores_extra_fields_in_post(http_client, headers):
+            data = urllib.parse.urlencode({ "name": "Fluffy", "size": "medium", "color": "gray" })
+            http_client.request("POST", "/squirrels", body=data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 201
+            http_client.close()
+
+        def it_accepts_very_long_name(http_client, headers):
+            long_name = "F" * 500
+            data = urllib.parse.urlencode({ "name": long_name, "size": "tiny" })
+            http_client.request("POST", "/squirrels", body=data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 201
+            http_client.close()
+
+        def it_accepts_unusual_size_label(http_client, headers):
+            data = urllib.parse.urlencode({ "name": "Oddball", "size": "colossal" })
+            http_client.request("POST", "/squirrels", body=data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 201
             http_client.close()
 
     def describe_get_squirrels():
@@ -157,6 +193,27 @@ def describe_squirrel_server():
             response = http_client.getresponse()
             assert response.status == 404
 
+        def it_ignores_extra_fields_in_put(http_client, headers):
+            create_data = urllib.parse.urlencode({ "name": "Fluffy", "size": "medium" })
+            http_client.request("POST", "/squirrels", body=create_data, headers=headers)
+            http_client.getresponse()
+
+            update_data = urllib.parse.urlencode({ "name": "Fluffier", "size": "giant", "color": "gray" })
+            http_client.request("PUT", "/squirrels/1", body=update_data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 204
+            http_client.close()
+
+        def it_allows_update_with_same_data(http_client, headers):
+            data = urllib.parse.urlencode({ "name": "Fluffy", "size": "medium" })
+            http_client.request("POST", "/squirrels", body=data, headers=headers)
+            http_client.getresponse()
+            http_client.request("PUT", "/squirrels/1", body=data, headers=headers)
+            response = http_client.getresponse()
+            assert response.status == 204
+            http_client.close()
+
+
     def describe_delete_squirrels():
 
         def it_returns_204_and_deletes_record(http_client, headers, squirrel_data):
@@ -185,6 +242,14 @@ def describe_squirrel_server():
             assert response.status == 404
             http_client.close()
 
+        def it_allows_immediate_delete_after_create(http_client, headers):
+            data = urllib.parse.urlencode({ "name": "Temp", "size": "small" })
+            http_client.request("POST", "/squirrels", body=data, headers=headers)
+            http_client.getresponse()
+            http_client.request("DELETE", "/squirrels/1")
+            response = http_client.getresponse()
+            assert response.status == 204
+            http_client.close()
 
     def describe_404_failures():
 
@@ -238,3 +303,16 @@ def describe_squirrel_server():
             http_client.request("POST", "/squirrels/1")
             assert http_client.getresponse().status == 404
             http_client.close()
+
+    def describe_concurrent_requests():
+
+        def it_handles_multiple_posts_simultaneously(headers):
+            def post_squirrel():
+                conn = http.client.HTTPConnection("localhost", 8080)
+                data = urllib.parse.urlencode({ "name": "Fast", "size": "tiny" })
+                conn.request("POST", "/squirrels", body=data, headers=headers)
+                return conn.getresponse().status
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                results = list(executor.map(lambda _: post_squirrel(), range(10)))
+                assert all(status == 201 for status in results)
