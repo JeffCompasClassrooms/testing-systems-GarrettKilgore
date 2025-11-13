@@ -10,7 +10,6 @@ import subprocess
 import time
 import urllib
 import concurrent.futures
-import socket
 import psutil
 
 def kill_existing_server(port=8080):
@@ -22,24 +21,13 @@ def kill_existing_server(port=8080):
                 p.terminate()
                 p.wait()
 
-
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "squirrel_db.db")
 EMPTY_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "empty_squirrel_db.db")
 
 def describe_squirrel_server():
 
-    #@pytest.fixture(autouse=True, scope="session")
-    #def start_server():
-    #     kill_existing_server(port=8080)
-    #     server = subprocess.Popen(["python3", "src/squirrel_server.py"])
-    #     time.sleep(1)
-    #     yield
-    #     server.terminate()
-    #     server.wait()
-
     @pytest.fixture(autouse=True)
     def reset_database():
-        """Reset the squirrel_db.db file before each test case."""
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
         shutil.copyfile(EMPTY_DB_PATH, DB_PATH)
@@ -47,13 +35,17 @@ def describe_squirrel_server():
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
 
-    @pytest.fixture(autouse=True, scope="session")
+    @pytest.fixture(scope="session", autouse=True)
     def start_server():
-         server = subprocess.Popen(["python3", "src/squirrel_server.py"])
-         time.sleep(1)
-         yield
-         server.terminate()
-         server.wait()
+        server = subprocess.Popen(["python3", "src/squirrel_server.py"])
+        time.sleep(1)
+        yield
+        kill_existing_server(port=8080)
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
 
     @pytest.fixture
     def http_client():
@@ -66,6 +58,7 @@ def describe_squirrel_server():
     @pytest.fixture
     def squirrel_data():
         return urllib.parse.urlencode({ "name": "Fluffy", "size": "large" })
+
 
     def describe_post_squirrels():
 
